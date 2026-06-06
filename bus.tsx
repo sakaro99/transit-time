@@ -51,8 +51,8 @@ type EtaEntry = {
 
 const t = {
   tc: {
-    title: "九巴到站時間",
-    subtitle: "輸入巴士路線查詢到站時間",
+    title: "到站時間",
+    subtitle: "輸入路線查詢即時到站時間",
     routePlaceholder: "輸入路線號碼 (例: 1, 1A, 74B)",
     search: "搜尋",
     refresh: "立即更新",
@@ -83,8 +83,8 @@ const t = {
     prevStop: "上一站",
   },
   en: {
-    title: "KMB Bus Arrival",
-    subtitle: "Enter a bus route to check arrival times",
+    title: "Transit Arrival",
+    subtitle: "Enter a route to check real-time arrival times",
     routePlaceholder: "Enter route number (e.g. 1, 1A, 74B)",
     search: "Search",
     refresh: "Refresh",

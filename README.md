@@ -4,7 +4,7 @@ Real-time Hong Kong transit arrival times. Starting with KMB (九巴) buses, wit
 
 Bilingual (繁體中文 / English), saved favourites, auto-refresh ETAs.
 
-- Live: https://sakaro.zo.space/bus
+- Live: https://sakaro.zo.space/bus (the KMB bus view; more transit modes coming)
 - Repo: https://github.com/sakaro99/transit-time
 
 ## Current features (KMB)
