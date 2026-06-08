@@ -1,10 +1,74 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Bus, Clock, Globe, Grid3x3, Plus, RefreshCw, Search, Star, X } from "lucide-react";
+import { Bus, Cloud, Clock, Globe, Grid3x3, Plus, RefreshCw, Search, Star, Sun, X } from "lucide-react";
 
 const KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb";
+const HKO_BASE = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php";
 const LANG_KEY = "kmb_lang";
 const RATE_KEY = "kmb_refresh_rate";
 const ROUTE_KEY = "kmb_last_route";
+const HKO_REFRESH_MS = 10 * 60 * 1000;
+
+// Minimal HKO icon → lucide icon + label mapping.
+// Source: https://www.hko.gov.hk/textonly/v2/explain/wxicon_e.htm (subset only)
+const HKO_ICON_MAP: Record<number, { Icon: typeof Sun; label: { tc: string; en: string }; tone: string }> = {
+  50: { Icon: Sun,   label: { tc: "陽光充沛",     en: "Sunny" },              tone: "text-amber-500" },
+  51: { Icon: Sun,   label: { tc: "間有陽光",     en: "Sunny periods" },     tone: "text-amber-500" },
+  52: { Icon: Sun,   label: { tc: "間有陽光",     en: "Sunny intervals" },   tone: "text-amber-500" },
+  53: { Icon: Cloud, label: { tc: "多雲",         en: "Cloudy" },            tone: "text-zinc-500" },
+  54: { Icon: Cloud, label: { tc: "天色較暗",     en: "Overcast" },          tone: "text-zinc-500" },
+  60: { Icon: Cloud, label: { tc: "多雲",         en: "Cloudy" },            tone: "text-zinc-500" },
+  61: { Icon: Cloud, label: { tc: "密雲",         en: "Overcast" },          tone: "text-zinc-500" },
+  62: { Icon: Cloud, label: { tc: "微雨",         en: "Light rain" },        tone: "text-sky-500" },
+  63: { Icon: Cloud, label: { tc: "雨",           en: "Rain" },              tone: "text-sky-600" },
+  64: { Icon: Cloud, label: { tc: "大雨",         en: "Heavy rain" },        tone: "text-sky-700" },
+  65: { Icon: Cloud, label: { tc: "雷暴",         en: "Thunderstorms" },     tone: "text-indigo-600" },
+  70: { Icon: Cloud, label: { tc: "微雨",         en: "Light rain" },        tone: "text-sky-500" },
+  71: { Icon: Cloud, label: { tc: "雨",           en: "Rain" },              tone: "text-sky-600" },
+  72: { Icon: Cloud, label: { tc: "大雨",         en: "Heavy rain" },        tone: "text-sky-700" },
+  73: { Icon: Cloud, label: { tc: "雷暴",         en: "Thunderstorms" },     tone: "text-indigo-600" },
+  75: { Icon: Cloud, label: { tc: "驟雨",         en: "Showers" },           tone: "text-sky-600" },
+  76: { Icon: Cloud, label: { tc: "雷暴驟雨",     en: "Squally thunderstorms" }, tone: "text-indigo-600" },
+  77: { Icon: Cloud, label: { tc: "驟雨",         en: "Showers" },           tone: "text-sky-600" },
+};
+
+type WeatherSnapshot = {
+  tempC: number | null;
+  iconCode: number | null;
+  updateTime: string | null;
+};
+
+function pickIconCode(icons: unknown): number | null {
+  if (Array.isArray(icons) && icons.length > 0 && typeof icons[0] === "number") return icons[0];
+  if (typeof icons === "number") return icons;
+  return null;
+}
+
+function findHkoStation(list: { place?: string; value?: number | string }[] | undefined): number | null {
+  if (!list) return null;
+  const m = list.find((s) => s.place === "Hong Kong Observatory" && typeof s.value === "number");
+  return m ? (m.value as number) : null;
+}
+
+function findStationByName(list: { place?: string; value?: number | string }[] | undefined, name: string): number | null {
+  if (!list) return null;
+  const m = list.find((s) => s.place === name && typeof s.value === "number");
+  return m ? (m.value as number) : null;
+}
+
+function pickHkoTemp(temperatureData: { place: string; value: number; unit: string }[] | undefined): number | null {
+  if (!temperatureData || temperatureData.length === 0) return null;
+  const hko = temperatureData.find((s) => s.place === "Hong Kong Observatory");
+  return hko ? hko.value : temperatureData[0].value;
+}
+
+async function fetchWeather(lang: Lang): Promise<WeatherSnapshot> {
+  const rhr = await fetch(`${HKO_BASE}?dataType=rhrread&lang=${lang}`).then((r) => r.json()).catch(() => null);
+  return {
+    tempC: pickHkoTemp(rhr?.temperature?.data),
+    iconCode: pickIconCode(rhr?.icon),
+    updateTime: rhr?.updateTime ?? null,
+  };
+}
 
 type Lang = "tc" | "en";
 type Rate = 15 | 30 | 60;
@@ -81,6 +145,7 @@ const t = {
     gridSubtitle: "你加入的巴士站，自動更新到站時間",
     addedToFav: "已加入最愛",
     prevStop: "上一站",
+    weatherErr: "暫時無法取得天氣資料",
   },
   en: {
     title: "Transit Arrival",
@@ -113,6 +178,7 @@ const t = {
     gridSubtitle: "Your saved bus stops with auto-updating ETAs",
     addedToFav: "Added to favourites",
     prevStop: "Prev stop",
+    weatherErr: "Weather data unavailable",
   },
 };
 
@@ -150,6 +216,50 @@ function formatClock(iso: string): string {
     hour12: false,
     timeZone: "Asia/Hong_Kong",
   });
+}
+
+// Renders the simplified weather row: icon + temperature + sky-condition
+// label only. Replaces the previous full H/L + rain pill.
+// Layout: [icon] [temp °C] [condition label]
+// On small screens: wrapped in a single inline span.
+function WeatherStrip(props: {
+  lang: Lang;
+  dict: typeof t["tc"] | typeof t["en"];
+  weather: WeatherSnapshot | null;
+  weatherErr: boolean;
+}) {
+  const { lang, dict, weather, weatherErr } = props;
+  if (weatherErr && !weather) {
+    return <p className="mt-1 text-sm text-zinc-400">{dict.weatherErr}</p>;
+  }
+  if (!weather) {
+    return (
+      <p className="mt-1 flex items-center gap-2 text-sm text-zinc-400">
+        <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-zinc-300" />
+        <span>{dict.weatherErr}</span>
+      </p>
+    );
+  }
+  const iconEntry = weather.iconCode != null ? HKO_ICON_MAP[weather.iconCode] : null;
+  const FallbackIcon = iconEntry?.Icon ?? Cloud;
+  const iconTone = iconEntry?.tone ?? "text-zinc-400";
+  const iconLabel = iconEntry ? iconEntry.label[lang] : "";
+  return (
+    <div
+      className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-600"
+      aria-label={lang === "tc" ? "天氣資訊" : "Weather info"}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <FallbackIcon className={`h-4 w-4 ${iconTone}`} aria-hidden="true" />
+        {weather.tempC != null && (
+          <span className="font-semibold text-zinc-900 tabular-nums">
+            {Math.round(weather.tempC)}°C
+          </span>
+        )}
+        {iconLabel && <span className="text-zinc-500">{iconLabel}</span>}
+      </span>
+    </div>
+  );
 }
 
 export default function KmbBusPage() {
@@ -199,7 +309,10 @@ export default function KmbBusPage() {
   const [favPrev, setFavPrev] = useState<Record<string, { stopId: string; nameTc: string; nameEn: string; eta: EtaEntry | null }>>({});
   const [favLast, setFavLast] = useState<number | null>(null);
   const [focusStopId, setFocusStopId] = useState<string | null>(null);
-  const [headerOutOfView, setHeaderOutOfView] = useState(false);
+
+  // Weather (HKO open data)
+  const [weather, setWeather] = useState<WeatherSnapshot | null>(null);
+  const [weatherErr, setWeatherErr] = useState<boolean>(false);
 
   const dict = t[lang];
 
@@ -214,6 +327,24 @@ export default function KmbBusPage() {
     const id = setInterval(() => setTickNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Weather (HKO): initial load + 10-min refresh, re-fetch on lang change
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const snap = await fetchWeather(lang);
+        if (cancelled) return;
+        setWeather(snap);
+        setWeatherErr(snap.tempC === null && snap.iconCode === null);
+      } catch {
+        if (!cancelled) setWeatherErr(true);
+      }
+    }
+    load();
+    const id = setInterval(load, HKO_REFRESH_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [lang]);
 
   const headerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -566,9 +697,7 @@ export default function KmbBusPage() {
                 {dict.title}
               </h1>
             </div>
-            <p className="mt-1 text-sm text-zinc-500">
-              {view === "search" ? dict.subtitle : dict.gridSubtitle}
-            </p>
+            <WeatherStrip lang={lang} dict={dict} weather={weather} weatherErr={weatherErr} />
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center rounded-full border border-zinc-200 bg-white p-1 shadow-sm">
