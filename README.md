@@ -1,17 +1,17 @@
 # transit-time
 
-Real-time Hong Kong transit arrival times. Starting with KMB (九巴) buses, with more modes coming (MTR, minibus, light rail, ferry, ...).
+Real-time Hong Kong transit arrival times. KMB (九巴) and Citybus (城巴), with more modes coming (MTR, minibus, light rail, ferry, ...).
 
 Bilingual (繁體中文 / English), saved favourites, auto-refresh ETAs.
 
 - Repo: https://github.com/sakaro99/transit-time
 
-## Current features (KMB)
+## Current features (KMB + Citybus)
 
-- Search any KMB route (e.g. `1`, `1A`, `74B`)
+- Search a KMB or Citybus route (e.g. `1`, `1A`, `5B`); switch company with the KMB / 城巴 toggle
 - Toggle inbound / outbound
 - Auto-refresh ETAs every 15s / 30s / 60s
-- ⭐ star stops into a Favourites tab (persisted in `localStorage`)
+- ⭐ star stops into a Favourites tab (persisted in `localStorage`; favourites remember their company)
 
 ## Roadmap
 
@@ -25,7 +25,9 @@ Bilingual (繁體中文 / English), saved favourites, auto-refresh ETAs.
 ## Data sources
 
 - KMB / LWB ETA: https://data.etabus.gov.hk/v1/transport/kmb — attribution: data.gov.hk
-- More to come as modes are added.
+- Citybus ETA: https://rt.data.gov.hk/v2/transport/citybus — attribution: data.gov.hk
+
+Citybus has no per-route ETA feed, so its ETAs are fetched per stop (`/eta/CTB/{stopId}/{route}`) and merged.
 
 ## Layout
 

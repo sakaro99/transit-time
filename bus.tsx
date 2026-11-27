@@ -2,10 +2,13 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Bus, Cloud, Clock, Globe, Grid3x3, Plus, RefreshCw, Search, Star, Sun, X } from "lucide-react";
 
 const KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb";
+const CTB_BASE = "https://rt.data.gov.hk/v2/transport/citybus";
 const HKO_BASE = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php";
 const LANG_KEY = "kmb_lang";
 const RATE_KEY = "kmb_refresh_rate";
 const ROUTE_KEY = "kmb_last_route";
+const CO_KEY = "transit_co";
+type Company = "KMB" | "CTB";
 const HKO_REFRESH_MS = 10 * 60 * 1000;
 
 // Minimal HKO icon → lucide icon + label mapping.
@@ -117,7 +120,9 @@ const t = {
   tc: {
     title: "到站時間",
     subtitle: "輸入路線查詢即時到站時間",
-    routePlaceholder: "輸入路線號碼 (例: 1, 1A, 74B)",
+    routePlaceholder: "輸入路線號碼 (例: 1, 1A, 5B)",
+    kmb: "九巴",
+    ctb: "城巴",
     search: "搜尋",
     refresh: "立即更新",
     seconds: "秒",
@@ -150,7 +155,9 @@ const t = {
   en: {
     title: "Transit Arrival",
     subtitle: "Enter a route to check real-time arrival times",
-    routePlaceholder: "Enter route number (e.g. 1, 1A, 74B)",
+    routePlaceholder: "Enter route number (e.g. 1, 1A, 5B)",
+    kmb: "KMB",
+    ctb: "Citybus",
     search: "Search",
     refresh: "Refresh",
     seconds: "s",
@@ -184,6 +191,7 @@ const t = {
 
 interface Favourite {
   id: string;
+  co?: Company;
   route: string;
   bound: Bound;
   stopId: string;
@@ -282,6 +290,11 @@ export default function KmbBusPage() {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem(ROUTE_KEY) || "";
   });
+  const [company, setCompany] = useState<Company>(() => {
+    if (typeof window === "undefined") return "KMB";
+    const saved = window.localStorage.getItem(CO_KEY);
+    return saved === "CTB" || saved === "KMB" ? saved : "KMB";
+  });
 
   const [variants, setVariants] = useState<RouteVariant[]>([]);
   const [activeBound, setActiveBound] = useState<Bound>("O");
@@ -319,6 +332,7 @@ export default function KmbBusPage() {
   useEffect(() => { window.localStorage.setItem(LANG_KEY, lang); }, [lang]);
   useEffect(() => { window.localStorage.setItem(RATE_KEY, String(rate)); }, [rate]);
   useEffect(() => { window.localStorage.setItem(ROUTE_KEY, searchedRoute); }, [searchedRoute]);
+  useEffect(() => { window.localStorage.setItem(CO_KEY, company); }, [company]);
   useEffect(() => { window.localStorage.setItem(VIEW_KEY, view); }, [view]);
   useEffect(() => { window.localStorage.setItem(FAVS_KEY, JSON.stringify(favs)); }, [favs]);
   useEffect(() => { if (toast) { const id = setTimeout(() => setToast(null), 1800); return () => clearTimeout(id); } }, [toast]);
@@ -371,6 +385,33 @@ export default function KmbBusPage() {
 
   const routeStops = allStopsByBound[activeBound] || [];
 
+  async function fetchCtbEtas(route: string, stopIds: string[]): Promise<EtaEntry[]> {
+    const r = encodeURIComponent(route);
+    const chunks = await Promise.all(
+      stopIds.map(async (id) => {
+        const json = await fetch(`${CTB_BASE}/eta/CTB/${encodeURIComponent(id)}/${r}`)
+          .then((res) => res.json())
+          .catch(() => null);
+        const rows = json && Array.isArray(json.data) ? json.data : [];
+        return rows.map((e: Record<string, unknown>) => ({
+          route: String(e.route || route),
+          dir: (e.dir === "I" ? "I" : "O") as Bound,
+          service_type: 1,
+          seq: Number(e.seq) || 0,
+          stop: String(e.stop || id),
+          dest_tc: String(e.dest_tc || ""),
+          dest_en: String(e.dest_en || ""),
+          eta_seq: Number(e.eta_seq) || 0,
+          eta: (e.eta as string | null) ?? null,
+          rmk_tc: String(e.rmk_tc || ""),
+          rmk_en: String(e.rmk_en || ""),
+          data_timestamp: String(e.data_timestamp || ""),
+        })) as EtaEntry[];
+      }),
+    );
+    return chunks.flat();
+  }
+
   async function fetchAllForRoute(route: string, boundOverride?: Bound) {
     if (!route) return;
     setLoading(true);
@@ -378,6 +419,86 @@ export default function KmbBusPage() {
     try {
       const bound: Bound = boundOverride || activeBoundRef.current;
       const r = encodeURIComponent(route);
+
+      if (company === "CTB") {
+        const [routeMeta, outStops, inStops] = await Promise.all([
+          fetch(`${CTB_BASE}/route/CTB/${r}`).then((res) => res.json()).catch(() => null),
+          fetch(`${CTB_BASE}/route-stop/CTB/${r}/outbound`).then((res) => res.json()).catch(() => null),
+          fetch(`${CTB_BASE}/route-stop/CTB/${r}/inbound`).then((res) => res.json()).catch(() => null),
+        ]);
+        const meta = routeMeta?.data;
+        const outList = Array.isArray(outStops?.data) ? outStops.data : [];
+        const inList = Array.isArray(inStops?.data) ? inStops.data : [];
+        if (!meta || (outList.length === 0 && inList.length === 0)) {
+          setVariants([]);
+          setAllStopsByBound({ O: [], I: [] });
+          setEtas([]);
+          setError(dict.noRoute);
+          return;
+        }
+        const variantList: RouteVariant[] = [];
+        if (outList.length) {
+          variantList.push({
+            route: meta.route || route,
+            bound: "O",
+            service_type: "1",
+            orig_tc: meta.orig_tc,
+            orig_en: meta.orig_en,
+            dest_tc: meta.dest_tc,
+            dest_en: meta.dest_en,
+          });
+        }
+        if (inList.length) {
+          variantList.push({
+            route: meta.route || route,
+            bound: "I",
+            service_type: "1",
+            orig_tc: meta.dest_tc,
+            orig_en: meta.dest_en,
+            dest_tc: meta.orig_tc,
+            dest_en: meta.orig_en,
+          });
+        }
+        setVariants(variantList);
+        const nextBound: Bound = variantList.find((v) => v.bound === bound) ? bound : variantList[0].bound;
+        if (nextBound !== bound) setActiveBound(nextBound);
+
+        const toStops = (rows: { route: string; dir: Bound; seq: number; stop: string }[], b: Bound): RouteStop[] =>
+          rows.map((s) => ({
+            route: s.route,
+            bound: (s.dir || b) as Bound,
+            service_type: "1",
+            seq: String(s.seq),
+            stop: s.stop,
+          }));
+        const stopsByBound: Record<Bound, RouteStop[]> = {
+          O: toStops(outList, "O"),
+          I: toStops(inList, "I"),
+        };
+        setAllStopsByBound(stopsByBound);
+
+        const ids = Array.from(new Set((stopsByBound[nextBound] || []).map((s) => s.stop)));
+        const allEta = await fetchCtbEtas(route, ids);
+        setEtas(allEta.filter((e) => e.dir === nextBound));
+
+        const missing = ids.filter((id) => !stopNamesRef.current[id]);
+        if (missing.length) {
+          const fetched = await Promise.all(
+            missing.map(async (id) => {
+              const json = await fetch(`${CTB_BASE}/stop/${encodeURIComponent(id)}`).then((res) => res.json());
+              return json.data as StopInfo;
+            }),
+          );
+          setStopNames((prev) => {
+            const next = { ...prev };
+            for (const s of fetched) if (s && s.stop) next[s.stop] = s;
+            return next;
+          });
+        }
+        setLastUpdated(Date.now());
+        return;
+      }
+
       const [outRoute, inRoute, outStops, inStops, etaAll] = await Promise.all([
         fetch(`${KMB_BASE}/route/${r}/outbound/1`).then((res) => res.json()).catch(() => null),
         fetch(`${KMB_BASE}/route/${r}/inbound/1`).then((res) => res.json()).catch(() => null),
@@ -445,7 +566,7 @@ export default function KmbBusPage() {
   useEffect(() => {
     if (!searchedRoute) return;
     fetchAllForRoute(searchedRoute);
-  }, [searchedRoute]);
+  }, [searchedRoute, company]);
 
   useEffect(() => {
     if (!searchedRoute) return;
@@ -467,14 +588,15 @@ export default function KmbBusPage() {
 
   function isFav(stopId: string): Favourite | undefined {
     if (!activeVariant) return undefined;
-    return favs.find((f) => f.route === activeVariant.route && f.bound === activeBound && f.stopId === stopId);
+    return favs.find((f) => (f.co || "KMB") === company && f.route === activeVariant.route && f.bound === activeBound && f.stopId === stopId);
   }
   function addFav(stop: RouteStop) {
     if (!activeVariant) return;
     if (isFav(stop.stop)) { setToast(dict.alreadyFav); return; }
     const info = stopNames[stop.stop];
     setFavs((prev) => [{
-      id: `${activeVariant.route}-${activeBound}-${stop.stop}-${Date.now()}`,
+      id: `${company}-${activeVariant.route}-${activeBound}-${stop.stop}-${Date.now()}`,
+      co: company,
       route: activeVariant.route,
       bound: activeBound,
       stopId: stop.stop,
@@ -485,6 +607,7 @@ export default function KmbBusPage() {
   }
   function rmFav(id: string) { setFavs((prev) => prev.filter((f) => f.id !== id)); }
   function goSearchFromFav(f: Favourite) {
+    setCompany(f.co || "KMB");
     setRouteInput(f.route);
     setSearchedRoute(f.route);
     setActiveBound(f.bound);
@@ -508,16 +631,73 @@ export default function KmbBusPage() {
   async function refreshFavs() {
     if (favs.length === 0) { setFavEtas({}); setFavRouteMeta({}); setFavPrev({}); return; }
     const byRouteBound: Record<string, Favourite[]> = {};
-    for (const f of favs) (byRouteBound[`${f.route}:${f.bound}`] ||= []).push(f);
+    for (const f of favs) (byRouteBound[`${f.co || "KMB"}:${f.route}:${f.bound}`] ||= []).push(f);
     const ne: Record<string, EtaEntry[]> = {};
     const nm: Record<string, { orig: { tc: string; en: string }; dest: { tc: string; en: string } }> = {};
     const np: Record<string, { stopId: string; nameTc: string; nameEn: string; eta: EtaEntry | null }> = {};
     const newNames: Record<string, StopInfo> = {};
     for (const [key, list] of Object.entries(byRouteBound)) {
-      const [routeOnly, boundFromKey] = key.split(":") as [string, Bound];
+      const parts = key.split(":");
+      const co = (parts[0] === "CTB" ? "CTB" : "KMB") as Company;
+      const routeOnly = parts[1];
+      const boundFromKey = parts[2] as Bound;
       const r = encodeURIComponent(routeOnly);
       const bb: Bound = boundFromKey || list[0].bound;
       const bp = bb === "O" ? "outbound" : "inbound";
+      if (co === "CTB") {
+        const [rm, rsj] = await Promise.all([
+          fetch(`${CTB_BASE}/route/CTB/${r}`).then((x) => x.json()).catch(() => null),
+          fetch(`${CTB_BASE}/route-stop/CTB/${r}/${bp}`).then((x) => x.json()).catch(() => null),
+        ]);
+        if (rm?.data) {
+          const meta = rm.data;
+          nm[`${co}:${routeOnly}:${bb}`] = bb === "O"
+            ? { orig: { tc: meta.orig_tc, en: meta.orig_en }, dest: { tc: meta.dest_tc, en: meta.dest_en } }
+            : { orig: { tc: meta.dest_tc, en: meta.dest_en }, dest: { tc: meta.orig_tc, en: meta.orig_en } };
+        }
+        const stopsArr: RouteStop[] = (rsj?.data || []).map((s: { route: string; dir: Bound; seq: number; stop: string }) => ({
+          route: s.route, bound: s.dir, service_type: "1", seq: String(s.seq), stop: s.stop,
+        }));
+        const stopsForBound = stopsArr.filter((s) => s.bound === bb);
+        const ids = Array.from(new Set(list.map((f) => f.stopId)));
+        const etasForBound = (await fetchCtbEtas(routeOnly, ids)).filter((e) => e.dir === bb);
+        for (const f of list) {
+          ne[f.id] = etasForBound
+            .filter((e) => e.stop === f.stopId && e.eta)
+            .sort((a, b) => new Date(a.eta!).getTime() - new Date(b.eta!).getTime());
+        }
+        for (const f of list) {
+          const myStops = stopsForBound.filter((s) => s.stop === f.stopId);
+          const mySeq = Math.max(-Infinity, ...myStops.map((s) => Number(s.seq)));
+          if (!Number.isFinite(mySeq)) continue;
+          const candidates = stopsForBound
+            .map((s) => ({ stop: s.stop, seq: Number(s.seq) }))
+            .filter((s) => s.seq < mySeq)
+            .sort((a, b) => b.seq - a.seq);
+          const prevStopId = candidates[0]?.stop;
+          if (!prevStopId) continue;
+          const prevInfo = stopNamesRef.current[prevStopId] || newNames[prevStopId];
+          const nextPrev = etasForBound
+            .filter((e) => e.stop === prevStopId && e.eta)
+            .sort((a, b) => new Date(a.eta!).getTime() - new Date(b.eta!).getTime())[0] || null;
+          np[f.id] = {
+            stopId: prevStopId,
+            nameTc: prevInfo?.name_tc || "",
+            nameEn: prevInfo?.name_en || "",
+            eta: nextPrev,
+          };
+        }
+        const neededIds = [...list.map((f) => f.stopId), ...Object.values(np).map((p) => p.stopId)]
+          .filter((id) => id && !stopNamesRef.current[id] && !newNames[id]);
+        if (neededIds.length) {
+          const fetched = await Promise.all(neededIds.map(async (id) => {
+            const res = await fetch(`${CTB_BASE}/stop/${encodeURIComponent(id)}`);
+            return (await res.json()).data as StopInfo;
+          }));
+          for (const s of fetched) if (s && s.stop) newNames[s.stop] = s;
+        }
+        continue;
+      }
       const [rm, rsj, ea] = await Promise.all([
         fetch(`${KMB_BASE}/route/${r}/${bp}/1`).then((x) => x.json()).catch(() => null),
         fetch(`${KMB_BASE}/route-stop/${r}/${bp}/1`).then((x) => x.json()).catch(() => null),
@@ -586,14 +766,17 @@ export default function KmbBusPage() {
   const etasByStop = useMemo(() => {
     const map: Record<string, EtaEntry[]> = {};
     const seqToStop: Record<string, string> = {};
+    const knownStops = new Set<string>();
     for (const s of routeStops) {
       const key = String(s.seq);
-      if (s.stop) seqToStop[key] = s.stop;
+      if (s.stop) {
+        seqToStop[key] = s.stop;
+        knownStops.add(s.stop);
+      }
     }
     for (const e of etas) {
       if (!e.eta) continue;
-      const seqKey = String(e.seq);
-      const stopId = seqToStop[seqKey];
+      const stopId = e.stop && knownStops.has(e.stop) ? e.stop : seqToStop[String(e.seq)];
       if (!stopId) continue;
       (map[stopId] ||= []).push(e);
     }
@@ -737,6 +920,21 @@ export default function KmbBusPage() {
         {view === "search" && (
           <div className="mb-4">
             <form onSubmit={onSearch} className="mb-4 flex gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
+              <div className="flex items-center gap-0.5 rounded-xl bg-zinc-100 p-0.5">
+                {(["KMB", "CTB"] as Company[]).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCompany(c)}
+                    className={`rounded-lg px-2.5 py-1.5 text-sm font-semibold transition ${
+                      company === c ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                    }`}
+                    aria-pressed={company === c}
+                  >
+                    {c === "KMB" ? dict.kmb : dict.ctb}
+                  </button>
+                ))}
+              </div>
               <div className="flex flex-1 items-center gap-2 px-2">
                 <Search className="h-5 w-5 text-zinc-400" />
                 <input
@@ -909,7 +1107,7 @@ export default function KmbBusPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
                   {favs.map((f) => {
-                    const meta = favRouteMeta[`${f.route}:${f.bound}`];
+                    const meta = favRouteMeta[`${f.co || "KMB"}:${f.route}:${f.bound}`];
                     const list = favEtas[f.id] || [];
                     const next = list[0];
                     const mins = next ? formatEtaMinutes(next.eta, tickNow) : null;
@@ -1018,7 +1216,7 @@ export default function KmbBusPage() {
           <a href="https://data.gov.hk/en-data/dataset/hk-td-tis_21-etakmb" target="_blank" rel="noreferrer" className="underline hover:text-zinc-600">
             data.gov.hk
           </a>{" "}
-          · KMB/LWB ETA
+          · KMB/LWB ETA{company === "CTB" ? " · Citybus ETA" : ""}
         </p>
       </div>
     </div>
