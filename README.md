@@ -6,9 +6,9 @@ Bilingual (繁體中文 / English), saved favourites, auto-refresh ETAs.
 
 - Repo: https://github.com/sakaro99/transit-time
 
-## Current features (KMB + Citybus)
+## Current features (KMB + Citybus + Green minibus)
 
-- Search a KMB or Citybus route (e.g. `1`, `1A`, `5B`); switch company with the KMB / 城巴 toggle
+- Search a KMB, Citybus or green minibus route (e.g. `1`, `1A`, `5B`, `44A`); switch with the 九巴 / 城巴 / 綠van toggle
 - Toggle inbound / outbound
 - Auto-refresh ETAs every 15s / 30s / 60s
 - ⭐ star stops into a Favourites tab (persisted in `localStorage`; favourites remember their company)
@@ -26,8 +26,12 @@ Bilingual (繁體中文 / English), saved favourites, auto-refresh ETAs.
 
 - KMB / LWB ETA: https://data.etabus.gov.hk/v1/transport/kmb — attribution: data.gov.hk
 - Citybus ETA: https://rt.data.gov.hk/v2/transport/citybus — attribution: data.gov.hk
+- Green minibus (GMB) ETA: https://data.etagmb.gov.hk — attribution: data.gov.hk
 
 Citybus has no per-route ETA feed, so its ETAs are fetched per stop (`/eta/CTB/{stopId}/{route}`) and merged.
+Green minibus is similar but keyed by operator route id: `/route/{region}/{code}` → `route_id`, then
+`/route-stop/{route_id}/{direction}` for stops and `/eta/route-stop/{route_id}/{direction}/{stop_seq}` per stop.
+Coverage is the routes enrolled in the TD scheme — not every green minibus, and no red minibuses.
 
 ## Layout
 
