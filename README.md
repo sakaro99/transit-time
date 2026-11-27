@@ -31,14 +31,25 @@ Citybus has no per-route ETA feed, so its ETAs are fetched per stop (`/eta/CTB/{
 
 ## Layout
 
-- `bus.tsx` — full page source for the KMB module, identical to the live `/bus` route on zo.space
-- This is a zo.space page (Bun + React + Hono). It runs on the Space tab, not as a standalone Zo Site.
+- `bus.tsx` — the whole page component (single file, default export)
+- Vite + React + Tailwind scaffold around it, so the repo runs standalone now that zo.space is gone
+
+## Local dev
+
+```bash
+npm install
+npm run dev     # http://127.0.0.1:5173
+npm run build   # static output in dist/
+```
+
+Both APIs send `Access-Control-Allow-Origin: *`, so the browser can call them directly — no proxy needed.
 
 ## To keep iterating
 
-Tell me what you want to change. I'll edit the live `/bus` route via `edit_space_route` and update the matching file here to keep the repo in sync.
+Edit `bus.tsx`; the dev server hot-reloads.
 
 ## Changelog
 
+- 2026-11-27 — Citybus (CTB) support. Company toggle, Citybus routes/stops/ETAs from `rt.data.gov.hk`, per-stop ETA merge, favourites remember their company. Also fixed a crash: `headerOutOfView` state was referenced but never declared, so the page failed to mount. Added a Vite/Tailwind scaffold for local testing.
 - 2026-06-06 — Repo created, renamed to `transit-time` to reflect the broader scope beyond KMB.
 - 2026-06-03 — Fix favourites: the Favourites tab previously rendered blank (the `view === "grid"` JSX block was missing) and the toast confirmation never showed. Now both render correctly; the grid shows each saved stop with its live ETAs, a refresh button, and per-card remove / jump-to-search actions.

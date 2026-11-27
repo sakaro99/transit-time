@@ -322,6 +322,7 @@ export default function KmbBusPage() {
   const [favPrev, setFavPrev] = useState<Record<string, { stopId: string; nameTc: string; nameEn: string; eta: EtaEntry | null }>>({});
   const [favLast, setFavLast] = useState<number | null>(null);
   const [focusStopId, setFocusStopId] = useState<string | null>(null);
+  const [headerOutOfView, setHeaderOutOfView] = useState(false);
 
   // Weather (HKO open data)
   const [weather, setWeather] = useState<WeatherSnapshot | null>(null);
